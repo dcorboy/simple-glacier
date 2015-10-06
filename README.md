@@ -8,7 +8,7 @@ I wanted a cheap and easy way to archive data in case of a catastrophic loss of 
 
 [Amazon Glacier](https://aws.amazon.com/glacier/) seemed like a perfect alternative at less than a quarter of the cost of S3 but both the multi-part upload of large files as well as the management of many split files was very difficult when using the [AWS Command Line Interface](https://aws.amazon.com/cli/).
 
-This simple command-line utility, developed using the [AWS SDK for Ruby](http://docs.aws.amazon.com/sdkforruby/api/index.html), simplifies the task of uploading, managing and removing archives as a named collection.
+Simple-Glacier is a command-line utility, developed using the [AWS SDK for Ruby](http://docs.aws.amazon.com/sdkforruby/api/index.html) that simplifies the task of uploading, managing and removing archives as named collections.
 
 ## Installation
 
@@ -33,6 +33,32 @@ Commmands:
 ```
 
 Simple-Glacier stores the metadata for every archive in a local JSON file (default: ./glacier_receipts.json). This allows you to list your files by the upload collection name you designate (a random name will be generated if one is not supplied.
+
+### Examples
+
+**Upload a new archive collection to Glacier**
+```
+$ split -b 1024m -d archive.tar.gz archive_split.tar.gz_
+$ ruby simple_glacier.rb -v BackupVault -n 2015-Oct archive_split.tar.gz_{00..99}
+```
+
+**List current archive collections**
+```
+$ ruby simple_glacier.rb list
+Local listing of all collections
+Collection: 2015-Aug                 -- 84 archives
+Collection: 2015-Sep                 -- 87 archives
+Collection: 2015-Oct                 -- 91 archives
+3 collections, 262 files total
+```
+
+**Remove all archives in the named collection from Glacier**
+```
+$ ruby simple_glacier -v BackupVault -n 2015-Aug delete
+...
+Delete 2015-Aug completed at 2015-11-02 00:00:17 -0400
+Archives deleted: 84, failed: 0
+```
 
 ## License
 

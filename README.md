@@ -18,6 +18,7 @@ If you already have Ruby and the AWS SDK installed, you can simply download the 
 
 ## Usage
 
+```
 Usage: simple_glacier.rb [options] command [files]
     -n, --name_upload=NAME           Name the upload collection for later reference
     -r, --receipts_file=FILE         JSON archive of upload-receipts
@@ -29,6 +30,7 @@ Commmands:
     upload file [file..]     --  Upload files as a named collection, appending to an existing collection
       list                   --  List file information for a named collection, or list all collections
     delete                   --  Delete all Glacier archive files in named collection
+```
 
 Simple-Glacier stores the metadata for every archive in a local JSON file (default: ./glacier_receipts.json). This allows you to list your files by the upload collection name you designate (a random name will be generated if one is not supplied.
 

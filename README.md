@@ -39,7 +39,7 @@ Simple-Glacier stores the metadata for every archive in a local JSON file (defau
 **Upload a new archive collection to Glacier**
 ```
 $ split -b 1024m -d archive.tar.gz archive_split.tar.gz_
-$ ruby simple_glacier.rb -v BackupVault -n 2015-Oct archive_split.tar.gz_{00..99}
+$ ruby simple_glacier.rb -v BackupVault -n 2015-Oct upload archive_split.tar.gz_{00..99}
 ```
 
 **List current archive collections**

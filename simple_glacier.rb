@@ -283,7 +283,13 @@ class Upload < GlacierCommand
   def do_action
     upload_receipts = ReceiptFileIO.get_collection_receipts(@receipts, $options.upload_name)
     @argv.each do |file|
-      upload_glacier_archive(file, upload_receipts) ? @completed += 1 : @failed += 1
+      if upload_glacier_archive(file, upload_receipts)
+        @completed += 1
+        puts "Archive #{file} uploaded successfully at #{Time.new}"
+      else
+        @failed += 1
+        puts "Archive #{file} FAILED upload at #{Time.new}"
+      end
     end
   end
 

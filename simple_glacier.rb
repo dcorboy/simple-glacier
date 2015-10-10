@@ -179,6 +179,16 @@ class MockUploadResponse  # used during testing
   end
 end
 
+class ExceptionResponse
+  def initialize(ex_class, ex_message)
+    @ex_class = ex_class
+    @ex_message = ex_message
+  end
+
+  attr_reader :ex_class
+  attr_reader :ex_message
+end
+
 class GlacierUploaderCore
   @@mock_response = MockUploadResponse.new
 
@@ -195,35 +205,61 @@ class GlacierUploaderCore
       puts "Call client.upload_archive"
       puts "with argument:"
       pp args
-      @@mock_response
+      [true, @@mock_response]
     else
-      $client.upload_archive(args)
-      # @@mock_response
+      begin
+        [true, $client.upload_archive(args)]
+        # raise                    # testing return conditions
+        # [true, @@mock_response]
+        # nil
+      rescue Exception => ex
+        [false, ExceptionResponse.new(ex.class, ex.message)]
+      end
     end
   end
 
-  def process_glacier_response(response, receipt)
-    if response.successful?
+  def process_response(response_pkg, receipt)
+    unless response_pkg
+      no_response = "nil response received from Glacier"
+      puts "ERROR #{no_response}"
+      receipt[:error] = no_response
       receipt[:glacier_response] = {
-        :archive_id => response.archive_id,
-        :checksum => response.checksum,
-        :location => response.location
+        :glacier_error => no_response,
+        :glacier_message => ""
       }
-    else
-      puts response.error
-      pp response # I have no idea what should be in here
-
-      resp_error = ''  # why do I have to do this?
-      resp_full = ''
-      PP.pp(response.error, resp_error)
-      PP.pp(response, resp_full)
-      receipt[:error] = "Something bad happened"
-      receipt[:glacier_response] = {
-        :glacier_error => resp_error,
-        :glacier_response => resp_full
-      }
+      return false
     end
-    response.successful?
+
+    valid, response = response_pkg
+    if valid
+      if response.successful?
+        receipt[:glacier_response] = {
+          :archive_id => response.archive_id,
+          :checksum => response.checksum,
+          :location => response.location
+        }
+      else
+        puts "ERROR of type #{response.error.code} occurred"
+        puts "Error message is: #{response.error.message}"
+        pp response # I have no idea what should be in here, but let's look at the whole thing
+
+        receipt[:error] = "Something bad happened, but it wasn't an exception"
+        receipt[:glacier_response] = {
+          :glacier_error => response.error.code,
+          :glacier_message => response.error.message
+        }
+      end
+      response.successful?
+    else
+      puts "ERROR of exception type #{response.ex_class} occurred"
+      puts "Exception message is: #{response.ex_message}"
+      receipt[:error] = "Exception caught during upload"
+      receipt[:glacier_response] = {
+        :glacier_error => response.ex_class,
+        :glacier_message => response.ex_message
+      }
+      false
+    end
   end
 end
 
@@ -315,10 +351,8 @@ class Upload < GlacierCommand
     rescue
       return puts "Failed to open #{filename}"
     end
-    unless (glacier_response = @@uploader.upload_archive(fileio, filename))
-      return puts "AWS Glacier upload for #{filename} failed with no response"
-    end
-    success = $dry_run ? true : @@uploader.process_glacier_response(glacier_response, receipt)
+    glacier_response = @@uploader.upload_archive(fileio, filename)
+    success = $dry_run ? true : @@uploader.process_response(glacier_response, receipt)
     receipt[:completed] = Time.new
     collection << receipt
     success

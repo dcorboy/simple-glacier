@@ -11,6 +11,12 @@ require 'aws-sdk'
 # json struct could use a header (version, failure metadata for retries?, vault collections, pending jobs)
 # incorporate vault collections?
 # add command to perform Glacier listing - job start, cache job id, check pending job, etc.
+# sync a glacier listing with local receipts?
+# option to 'retry' failed uploads
+# retry n times on initial upload
+# a manual re-upload shoudl replace the existing node (would fn comparisons ignore paths?)
+# maybe collection should be a hash with fn/desc as key? (no, paths would f that up)
+# record and report archive and collection sizes
 
 #############
 ### MAIN
@@ -125,17 +131,54 @@ def show_help_and_exit()
   pp Parser.parse %w[--help]  # exits
 end
 
+class Hash
+  def deep_seek(*_keys_)
+    last_level    = self
+    sought_value  = nil
+
+    _keys_.each_with_index do |_key_, _idx_|
+      if last_level.is_a?(Hash) && last_level.has_key?(_key_)
+        if _idx_ + 1 == _keys_.length
+          sought_value = last_level[_key_]
+        else
+          last_level = last_level[_key_]
+        end
+      else
+        break
+      end
+    end
+
+    sought_value
+  end
+
+  def deep_set(value, *_keys_)
+    level    = self
+
+    _keys_.each_with_index do |_key_, _idx_|
+      if _idx_ + 1 == _keys_.length
+        level[_key_] = value
+      elsif level.has_key?(_key_)
+        level = level[_key_]
+      else
+        level = (level[_key_] = {})
+      end
+    end
+    value
+  end
+end
+
 class ReceiptFileIO
   def self.load_receipts(filename)
     if File.file?(filename)
       file = File.read(filename)
       begin
-        JSON.parse(file)
+        json = JSON.parse(file)
       rescue
         nil
       end
+      update_version(json)
     else
-      {}  # will create a new receipts file
+      {"version" => 1}  # will create a new receipts file
     end
   end
 
@@ -148,11 +191,46 @@ class ReceiptFileIO
     end
   end
 
-  def self.get_collection_receipts(receipts_object, upload_name)
-    unless (upload = receipts_object[upload_name])
-      upload = (receipts_object[upload_name] = [])
+  def self.get_named_collection(receipts_object, vault_name, collection_name, create = false)
+    collection = receipts_object.deep_seek("vaults", vault_name, collection_name)
+    if collection.nil? && create
+      collection = receipts_object.deep_set([], "vaults", vault_name, collection_name)
     end
-    upload
+    collection
+  end
+
+  def self.get_vault_collections(receipts_object, vault_name, create = false)
+    collection = receipts_object.deep_seek("vaults", vault_name)
+    if collection.nil? && create
+      collection = receipts_object.deep_set({}, "vaults", vault_name)
+    end
+    collection
+  end
+
+  def self.get_vaults(receipts_object, create = false)
+    collection = receipts_object["vaults"]
+    if collection.nil? && create
+      collection = (receipts_object["vaults"] = {})
+    end
+    collection
+  end
+
+  def self.update_version(json)
+    from_version = json["version"] || 0
+    puts "Source version: #{from_version}"
+
+    if from_version < 1
+      puts "version 0"
+      json = {
+        "version" => 1,
+        "vaults" => {
+          $options.vault => json
+        }
+      }
+    end
+    # if from_version < 2 (convert from 1 -> 2) end ... etc
+
+    json
   end
 end
 
@@ -208,9 +286,9 @@ class GlacierUploaderCore
       [true, @@mock_response]
     else
       begin
-        [true, $client.upload_archive(args)]
+        # [true, $client.upload_archive(args)]
         # raise                    # testing return conditions
-        # [true, @@mock_response]
+        [true, @@mock_response]
         # nil
       rescue Exception => ex
         [false, ExceptionResponse.new(ex.class, ex.message)]
@@ -317,7 +395,7 @@ class Upload < GlacierCommand
   end
 
   def do_action
-    upload_receipts = ReceiptFileIO.get_collection_receipts(@receipts, $options.upload_name)
+    upload_receipts = ReceiptFileIO.get_named_collection(@receipts, $options.vault, $options.upload_name, true)
     @argv.each do |file|
       if upload_glacier_archive(file, upload_receipts)
         @completed += 1
@@ -385,35 +463,46 @@ class List < GlacierCommand
 
   def do_action
     if $options.upload_name
-      @upload_receipts = ReceiptFileIO.get_collection_receipts(@receipts, $options.upload_name)
-      @upload_receipts.each do |receipt|
-        puts receipt["filename"]
-        printf("Description: %s\n", receipt["description"])
-        glacier_response = receipt["glacier_response"]
-        if glacier_response && glacier_response["archive_id"]
-          printf("Archive file uploaded %s\n", receipt["completed"])
-          printf("Glacier archive ID: %s\n\n", glacier_response["archive_id"])
-          @completed += 1
-        else
-          printf("FAILED archive file upload at %s\n", receipt["completed"])
-          printf("Error message: %s\n\n", receipt["error"] ||= "None")
-          @failed += 1
+      if (@collection = ReceiptFileIO.get_named_collection(@receipts, $options.vault, $options.upload_name)).nil?
+        puts "No archive files found for collection #{$options.upload_name}"
+      else
+        @collection.each do |receipt|
+          puts receipt["filename"]
+          printf("Description: %s\n", receipt["description"])
+          glacier_response = receipt["glacier_response"]
+          if glacier_response && glacier_response["archive_id"]
+            printf("Archive file uploaded %s\n", receipt["completed"])
+            printf("Glacier archive ID: %s\n\n", glacier_response["archive_id"])
+            @completed += 1
+          else
+            printf("FAILED archive file upload at %s\n", receipt["completed"])
+            printf("Error message: %s\n\n", receipt["error"] ||= "None")
+            @failed += 1
+          end
         end
       end
     else
-      @receipts.each do |name, archives|
-        printf("Collection: %-24s -- %d archives\n", name, archives.count)
-        @completed += archives.count
+      if (@collection = ReceiptFileIO.get_vault_collections(@receipts, $options.vault)).nil?
+        puts "No collections found for vault #{$options.vault}"
+      else
+        @collection.each do |name, archives|
+          printf("Collection: %-24s -- %d archives\n", name, archives.count)
+          @completed += archives.count
+        end
       end
     end
   end
 
   def banner_end
-    if $options.upload_name
-      puts "Upload collection #{$options.upload_name} contains #{@upload_receipts.count} archives"
-      puts "#{@completed} files complete, #{@failed} files failed to upload"
+    if @collection.nil?
+      puts "Listing failed"
     else
-      puts "#{@receipts.count} collections, #{@completed} files total"
+      if $options.upload_name
+        puts "Upload collection #{$options.upload_name} contains #{@collection.count} archives"
+        puts "#{@completed} files complete, #{@failed} files failed to upload"
+      else
+        puts "#{@collection.count} collections, #{@completed} files total"
+      end
     end
   end
 end
@@ -440,22 +529,26 @@ class Delete < GlacierCommand
   end
 
   def do_action
-    if (upload_receipts = ReceiptFileIO.get_collection_receipts(@receipts, $options.upload_name)).empty?
+    if (@collection = ReceiptFileIO.get_named_collection(@receipts, $options.vault, $options.upload_name)).nil?
       puts "No archive files found for collection #{$options.upload_name}"
     else
-      upload_receipts.delete_if do |receipt|
-        (success = delete_glacier_archive(receipt, upload_receipts)) ? @completed += 1 : @failed += 1
+      @collection.delete_if do |receipt|
+        (success = delete_glacier_archive(receipt, @collection)) ? @completed += 1 : @failed += 1
         success
       end
-      if upload_receipts.empty?
-        @receipts.delete($options.upload_name)
+      if @collection.empty?
+        ReceiptFileIO.get_vault_collections(@receipts, $options.vault).delete($options.upload_name)
       end
     end
   end
 
   def banner_end
-    puts "Delete #{$options.upload_name} completed at #{Time.new}"
-    puts "Archives deleted: #{@completed}, failed: #{@failed}"
+    if @collection.nil?
+      puts "Delete failed"
+    else
+      puts "Delete #{$options.upload_name} completed at #{Time.new}"
+      puts "Archives deleted: #{@completed}, failed: #{@failed}"
+    end
   end
 
   def save_receipts?
@@ -485,8 +578,8 @@ class Delete < GlacierCommand
         false  # change for testing
       else
         begin
-          $client.delete_archive(args)
-          # true
+          # $client.delete_archive(args)
+          true
         rescue Exception => ex
           puts "Delete failed for #{receipt["filename"]} (#{receipt["description"]}) -- An error of type #{ex.class} occurred"
           puts "Glacier message is: #{ex.message}"

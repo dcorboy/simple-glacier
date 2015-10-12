@@ -25,7 +25,12 @@ require 'aws-sdk'
 class SimpleGlacier
   def self.run
     # parse arguments and options
-    $options = Parser.parse(ARGV)
+    begin
+      $options = Parser.parse(ARGV)
+    rescue OptionParser::InvalidOption => ex
+      puts "Error: #{ex.message}"
+      show_help_and_exit()
+    end
     # pp $options
 
     if ARGV.length == 0

@@ -10,6 +10,7 @@ require 'aws-sdk'
 # option to overwrite existing named upload collection (default is append)
 # json struct could use a header (version, failure metadata for retries?, vault collections, pending jobs)
 # incorporate vault collections?
+# listings should include all vaults? (can't default the vault name, then -- or could use different command)
 # add command to perform Glacier listing - job start, cache job id, check pending job, etc.
 # sync a glacier listing with local receipts?
 # option to 'retry' failed uploads
@@ -101,7 +102,7 @@ class Parser
     opt_parser = OptionParser.new do |opts|
       opts.banner = "Usage: #{$0} [options] command [files]"
 
-      opts.on("-n NAME", "--name_upload=NAME", "Name the upload collection for later reference") do |o|
+      opts.on("-n NAME", "--collection_name=NAME", "Name the upload collection for later reference") do |o|
         args.upload_name = o
       end
 
@@ -283,6 +284,24 @@ end
 class GlacierUploaderCore
   @@mock_response = MockUploadResponse.new
 
+  def upload_glacier_archive(filename, collection)
+    receipt = {
+      :filename => filename,
+      :description => filename
+    }
+    begin
+      fileio = File.open(filename, 'r')
+    rescue
+      return puts "Failed to open #{filename}"
+    end
+    glacier_response = upload_archive(fileio, filename)
+    success = $dry_run ? true : process_response(glacier_response, receipt)
+    receipt[:completed] = Time.new
+    collection << receipt
+    success
+  end
+
+  protected
   def upload_archive(data, description)
     args = {
       account_id: "-",
@@ -299,9 +318,9 @@ class GlacierUploaderCore
       [true, @@mock_response]
     else
       begin
-        [true, $client.upload_archive(args)]
+        # [true, $client.upload_archive(args)]
         # raise                    # testing return conditions
-        # [true, @@mock_response]
+        [true, @@mock_response]
         # nil
       rescue Exception => ex
         [false, ExceptionResponse.new(ex.class, ex.message)]
@@ -410,7 +429,7 @@ class Upload < GlacierCommand
   def do_action
     upload_receipts = ReceiptFileIO.get_named_collection(@receipts, $options.vault, $options.upload_name, true)
     @argv.each do |file|
-      if upload_glacier_archive(file, upload_receipts)
+      if @@uploader.upload_glacier_archive(file, upload_receipts)
         @completed += 1
         puts "Archive #{file} uploaded successfully at #{Time.new}"
       else
@@ -429,25 +448,6 @@ class Upload < GlacierCommand
     true
   end
 
-  #### protected class methods
-  protected
-
-  def upload_glacier_archive(filename, collection)
-    receipt = {
-      :filename => filename,
-      :description => filename
-    }
-    begin
-      fileio = File.open(filename, 'r')
-    rescue
-      return puts "Failed to open #{filename}"
-    end
-    glacier_response = @@uploader.upload_archive(fileio, filename)
-    success = $dry_run ? true : @@uploader.process_response(glacier_response, receipt)
-    receipt[:completed] = Time.new
-    collection << receipt
-    success
-  end
 end
 
 class List < GlacierCommand
@@ -591,7 +591,7 @@ class Delete < GlacierCommand
         false  # change for testing
       else
         begin
-          $client.delete_archive(args)
+          # $client.delete_archive(args)
           true
         rescue Exception => ex
           puts "Delete failed for #{receipt["filename"]} (#{receipt["description"]}) -- An error of type #{ex.class} occurred"

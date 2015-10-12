@@ -18,6 +18,7 @@ require 'aws-sdk'
 # maybe collection should be a hash with fn/desc as key? (no, paths would f that up)
 # record and report archive and collection sizes
 
+
 #############
 ### MAIN
 #############

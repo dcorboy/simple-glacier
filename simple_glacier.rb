@@ -168,6 +168,8 @@ class Hash
 end
 
 class ReceiptFileIO
+  @@version = 1
+
   def self.load_receipts(filename)
     if File.file?(filename)
       file = File.read(filename)
@@ -178,7 +180,7 @@ class ReceiptFileIO
       end
       update_version(json)
     else
-      {"version" => 1}  # will create a new receipts file
+      {"version" => @@version}  # will create a new receipts file
     end
   end
 
@@ -217,19 +219,25 @@ class ReceiptFileIO
 
   def self.update_version(json)
     from_version = json["version"] || 0
-    puts "Source version: #{from_version}"
+    if from_version < @@version
+      puts "Converting receipts file from version: #{from_version}"
+    elsif from_version > @@version
+      puts "Incompatible receipts file version: #{from_version}"
+      return nil
+    end
 
     if from_version < 1
       puts "version 0"
       json = {
-        "version" => 1,
         "vaults" => {
           $options.vault => json
         }
       }
     end
+
     # if from_version < 2 (convert from 1 -> 2) end ... etc
 
+    json["version"] = @@version
     json
   end
 end
@@ -286,9 +294,9 @@ class GlacierUploaderCore
       [true, @@mock_response]
     else
       begin
-        # [true, $client.upload_archive(args)]
+        [true, $client.upload_archive(args)]
         # raise                    # testing return conditions
-        [true, @@mock_response]
+        # [true, @@mock_response]
         # nil
       rescue Exception => ex
         [false, ExceptionResponse.new(ex.class, ex.message)]
@@ -578,7 +586,7 @@ class Delete < GlacierCommand
         false  # change for testing
       else
         begin
-          # $client.delete_archive(args)
+          $client.delete_archive(args)
           true
         rescue Exception => ex
           puts "Delete failed for #{receipt["filename"]} (#{receipt["description"]}) -- An error of type #{ex.class} occurred"
@@ -586,7 +594,8 @@ class Delete < GlacierCommand
         end
       end
     else
-      puts "Skipping #{receipt["filename"]} (#{receipt["description"]}) -- no Glacier archive ID"
+      puts "Removing #{receipt["filename"]} (#{receipt["description"]}) -- no Glacier archive ID"
+      true
     end
   end
 end

@@ -15,7 +15,6 @@ require 'aws-sdk'
 # sync a glacier listing with local receipts?
 # option to 'retry' failed uploads
 # retry n times on initial upload
-# a manual re-upload shoudl replace the existing node (would fn comparisons ignore paths?)
 # maybe collection should be a hash with fn/desc as key? (no, paths would f that up)
 # record and report archive and collection sizes
 
@@ -285,19 +284,25 @@ class GlacierUploaderCore
   @@mock_response = MockUploadResponse.new
 
   def upload_glacier_archive(filename, collection)
-    receipt = {
-      :filename => filename,
-      :description => filename
-    }
     begin
       fileio = File.open(filename, 'r')
     rescue
       return puts "Failed to open #{filename}"
     end
+
+    if (receipt = collection.select{|archive| archive["filename"] == filename}[0])
+      puts "Updating existing receipt for #{filename}"
+      receipt["error"] = nil
+    else
+      receipt = {
+        "filename" => filename,
+        "description" => filename
+      }
+      collection << receipt
+    end
     glacier_response = upload_archive(fileio, filename)
     success = $dry_run ? true : process_response(glacier_response, receipt)
-    receipt[:completed] = Time.new
-    collection << receipt
+    receipt["completed"] = Time.new
     success
   end
 
@@ -318,9 +323,9 @@ class GlacierUploaderCore
       [true, @@mock_response]
     else
       begin
-        # [true, $client.upload_archive(args)]
-        # raise                    # testing return conditions
-        [true, @@mock_response]
+        [true, $client.upload_archive(args)]
+        #raise                    # testing return conditions
+        # [true, @@mock_response]
         # nil
       rescue Exception => ex
         [false, ExceptionResponse.new(ex.class, ex.message)]
@@ -332,10 +337,10 @@ class GlacierUploaderCore
     unless response_pkg
       no_response = "nil response received from Glacier"
       puts "ERROR #{no_response}"
-      receipt[:error] = no_response
-      receipt[:glacier_response] = {
-        :glacier_error => no_response,
-        :glacier_message => ""
+      receipt["error"] = no_response
+      receipt["glacier_response"] = {
+        "glacier_error" => no_response,
+        "glacier_message" => ""
       }
       return false
     end
@@ -343,30 +348,30 @@ class GlacierUploaderCore
     valid, response = response_pkg
     if valid
       if response.successful?
-        receipt[:glacier_response] = {
-          :archive_id => response.archive_id,
-          :checksum => response.checksum,
-          :location => response.location
+        receipt["glacier_response"] = {
+          "archive_id" => response.archive_id,
+          "checksum" => response.checksum,
+          "location" => response.location
         }
       else
         puts "ERROR of type #{response.error.code} occurred"
         puts "Error message is: #{response.error.message}"
         pp response # I have no idea what should be in here, but let's look at the whole thing
 
-        receipt[:error] = "Something bad happened, but it wasn't an exception"
-        receipt[:glacier_response] = {
-          :glacier_error => response.error.code,
-          :glacier_message => response.error.message
+        receipt["error"] = "Something bad happened, but it wasn't an exception"
+        receipt["glacier_response"] = {
+          "glacier_error" => response.error.code,
+          "glacier_message" => response.error.message
         }
       end
       response.successful?
     else
       puts "ERROR of exception type #{response.ex_class} occurred"
       puts "Exception message is: #{response.ex_message}"
-      receipt[:error] = "Exception caught during upload"
-      receipt[:glacier_response] = {
-        :glacier_error => response.ex_class,
-        :glacier_message => response.ex_message
+      receipt["error"] = "Exception caught during upload"
+      receipt["glacier_response"] = {
+        "glacier_error" => response.ex_class,
+        "glacier_message" => response.ex_message
       }
       false
     end
@@ -591,7 +596,7 @@ class Delete < GlacierCommand
         false  # change for testing
       else
         begin
-          # $client.delete_archive(args)
+          $client.delete_archive(args)
           true
         rescue Exception => ex
           puts "Delete failed for #{receipt["filename"]} (#{receipt["description"]}) -- An error of type #{ex.class} occurred"

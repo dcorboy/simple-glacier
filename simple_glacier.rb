@@ -241,7 +241,6 @@ class ReceiptFileIO
     end
 
     if from_version < 1
-      puts "version 0"
       json = {
         "vaults" => {
           $options.vault => json
@@ -296,17 +295,17 @@ class GlacierUploaderCore
     begin
       fileio = File.open(filename, 'r')
     rescue
-      return puts "Failed to open #{filename}"
+      return puts "  Failed to open #{filename}"
     end
 
     if (receipt = collection.select{|archive| archive["filename"] == filename}[0])
       existing_id = receipt.deep_seek("glacier_response", "archive_id")
       if !$options.force && existing_id && !existing_id.empty?
-        puts "Skipping #{filename} -- A Glacier archive ID already exists and would be lost"
-        puts "Use -force option to allow the existing record to be overwritten"
+        puts "  Skipping #{filename} -- A Glacier archive ID already exists and would be lost"
+        puts "  Use -force option to allow the existing record to be overwritten"
         return false
       end
-      puts "Updating existing receipt for #{filename}"
+      puts "  Updating existing receipt for #{filename}"
       receipt["error"] = nil
       description = receipt["description"]
     else
@@ -334,14 +333,14 @@ class GlacierUploaderCore
     }
 
     if $dry_run
-      puts "Call client.upload_archive"
-      puts "with argument:"
+      puts "  Call client.upload_archive"
+      puts "  with argument:"
       pp args
       [true, @@mock_response]
     else
       begin
         if $options.debug
-          puts "DEBUG: AWS upload was not called"
+          puts "  DEBUG: AWS upload was not called"
           # raise                    # testing return conditions
           [true, @@mock_response]
           # nil
@@ -357,7 +356,7 @@ class GlacierUploaderCore
   def process_response(response_pkg, receipt)
     unless response_pkg
       no_response = "nil response received from Glacier"
-      puts "ERROR #{no_response}"
+      puts "  ERROR -- #{no_response}"
       receipt["error"] = no_response
       receipt["glacier_response"] = {
         "glacier_error" => no_response,
@@ -375,8 +374,8 @@ class GlacierUploaderCore
           "location" => response.location
         }
       else
-        puts "ERROR of type #{response.error.code} occurred"
-        puts "Error message is: #{response.error.message}"
+        puts "  ERROR of type #{response.error.code} occurred"
+        puts "  Error message is: #{response.error.message}"
         pp response # I have no idea what should be in here, but let's look at the whole thing
 
         receipt["error"] = "Something bad happened, but it wasn't an exception"
@@ -387,8 +386,8 @@ class GlacierUploaderCore
       end
       response.successful?
     else
-      puts "ERROR of exception type #{response.ex_class} occurred"
-      puts "Exception message is: #{response.ex_message}"
+      puts "  ERROR of exception type #{response.ex_class} occurred"
+      puts "  Exception message is: #{response.ex_message}"
       receipt["error"] = "Exception caught during upload"
       receipt["glacier_response"] = {
         "glacier_error" => response.ex_class,
@@ -611,25 +610,25 @@ class Delete < GlacierCommand
         archive_id: id
       }
       if $dry_run
-        puts "Call client.delete_archive"
-        puts "with argument:"
+        puts "  Call client.delete_archive"
+        puts "  with argument:"
         pp args
         false  # change for testing
       else
         begin
           if $options.debug
-            puts "DEBUG: AWS delete was not called"
+            puts "  DEBUG: AWS delete was not called"
           else
             $client.delete_archive(args)
           end
           true
         rescue Exception => ex
-          puts "Delete failed for #{receipt["filename"]} (#{receipt["description"]}) -- An error of type #{ex.class} occurred"
-          puts "Glacier message is: #{ex.message}"
+          puts "  Delete failed for #{receipt["filename"]} (#{receipt["description"]}) -- An error of type #{ex.class} occurred"
+          puts "  Glacier message is: #{ex.message}"
         end
       end
     else
-      puts "Removing #{receipt["filename"]} (#{receipt["description"]}) -- no Glacier archive ID"
+      puts "  Removing #{receipt["filename"]} (#{receipt["description"]}) -- no Glacier archive ID"
       true
     end
   end

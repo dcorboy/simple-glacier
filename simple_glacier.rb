@@ -93,11 +93,11 @@ end
 ### UTILITY CLASSES
 ###################
 
-Options = Struct.new(:receipts_file, :upload_name, :dry_run, :vault, :debug)
+Options = Struct.new(:receipts_file, :upload_name, :dry_run, :vault, :force, :debug)
 
 class Parser
   def self.parse(options)
-    args = Options.new("glacier_receipts.json", nil, false, "corbuntu_archive", false)
+    args = Options.new("glacier_receipts.json", nil, false, "corbuntu_archive", false, false)
 
     opt_parser = OptionParser.new do |opts|
       opts.banner = "Usage: #{$0} [options] command [files]"
@@ -116,6 +116,10 @@ class Parser
 
       opts.on("-d", "--dry_run", "If flag is present, no actions are taken and are instead displayed") do |o|
         args.dry_run = o
+      end
+
+      opts.on("-f", "--force", "Unless flag is present, archives with a Glacier archive ID will not be re-uploaded") do |o|
+        args.force = o
       end
 
       opts.on("-t", "--test_debug", "If flag is present, AWS will not be called but otherwise actions will work normally") do |o|
@@ -296,6 +300,12 @@ class GlacierUploaderCore
     end
 
     if (receipt = collection.select{|archive| archive["filename"] == filename}[0])
+      existing_id = receipt.deep_seek("glacier_response", "archive_id")
+      if !$options.force && existing_id && !existing_id.empty?
+        puts "Skipping #{filename} -- A Glacier archive ID already exists and would be lost"
+        puts "Use -force option to allow the existing record to be overwritten"
+        return false
+      end
       puts "Updating existing receipt for #{filename}"
       receipt["error"] = nil
       description = receipt["description"]

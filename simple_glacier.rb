@@ -298,14 +298,16 @@ class GlacierUploaderCore
     if (receipt = collection.select{|archive| archive["filename"] == filename}[0])
       puts "Updating existing receipt for #{filename}"
       receipt["error"] = nil
+      description = receipt["description"]
     else
+      description = $options.upload_name + "::" + filename
       receipt = {
         "filename" => filename,
-        "description" => filename
+        "description" => description
       }
       collection << receipt
     end
-    glacier_response = upload_archive(fileio, filename)
+    glacier_response = upload_archive(fileio, description)
     success = $dry_run ? true : process_response(glacier_response, receipt)
     receipt["completed"] = Time.new
     success

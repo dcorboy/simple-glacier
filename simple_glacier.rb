@@ -93,11 +93,11 @@ end
 ### UTILITY CLASSES
 ###################
 
-Options = Struct.new(:receipts_file, :upload_name, :dry_run, :vault)
+Options = Struct.new(:receipts_file, :upload_name, :dry_run, :vault, :debug)
 
 class Parser
   def self.parse(options)
-    args = Options.new("glacier_receipts.json", nil, false, "corbuntu_archive")
+    args = Options.new("glacier_receipts.json", nil, false, "corbuntu_archive", false)
 
     opt_parser = OptionParser.new do |opts|
       opts.banner = "Usage: #{$0} [options] command [files]"
@@ -116,6 +116,10 @@ class Parser
 
       opts.on("-d", "--dry_run", "If flag is present, no actions are taken and are instead displayed") do |o|
         args.dry_run = o
+      end
+
+      opts.on("-t", "--test_debug", "If flag is present, AWS will not be called but otherwise actions will work normally") do |o|
+        args.debug = o
       end
 
       opts.on("-h", "--help", "Prints this help") do
@@ -324,10 +328,14 @@ class GlacierUploaderCore
       [true, @@mock_response]
     else
       begin
-        [true, $client.upload_archive(args)]
-        #raise                    # testing return conditions
-        # [true, @@mock_response]
-        # nil
+        if $options.debug
+          puts "DEBUG: AWS upload was not called"
+          # raise                    # testing return conditions
+          [true, @@mock_response]
+          # nil
+        else
+          [true, $client.upload_archive(args)]
+        end
       rescue Exception => ex
         [false, ExceptionResponse.new(ex.class, ex.message)]
       end
@@ -597,7 +605,11 @@ class Delete < GlacierCommand
         false  # change for testing
       else
         begin
-          $client.delete_archive(args)
+          if $options.debug
+            puts "DEBUG: AWS delete was not called"
+          else
+            $client.delete_archive(args)
+          end
           true
         rescue Exception => ex
           puts "Delete failed for #{receipt["filename"]} (#{receipt["description"]}) -- An error of type #{ex.class} occurred"

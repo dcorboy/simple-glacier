@@ -7,16 +7,14 @@ require 'json'
 require 'aws-sdk'
 
 #TODO
-# option to overwrite existing named upload collection (default is append)
-# json struct could use a header (version, failure metadata for retries?, vault collections, pending jobs)
-# incorporate vault collections?
 # listings should include all vaults? (can't default the vault name, then -- or could use different command)
 # add command to perform Glacier listing - job start, cache job id, check pending job, etc.
 # sync a glacier listing with local receipts?
 # option to 'retry' failed uploads
 # retry n times on initial upload
-# maybe collection should be a hash with fn/desc as key? (no, paths would f that up)
-# record and report archive and collection sizes
+# maybe collection should be a hash with fn/desc as key?
+# report collection sizes in general list output?
+# fix stdout vs stderr output
 
 
 #############
@@ -316,6 +314,7 @@ class GlacierUploaderCore
       }
       collection << receipt
     end
+    receipt["size"] = File.size(filename)
     glacier_response = upload_archive(fileio, description)
     success = $dry_run ? true : process_response(glacier_response, receipt)
     receipt["completed"] = Time.new
@@ -480,6 +479,7 @@ class List < GlacierCommand
     super(argv, receipts)
     @completed = 0
     @failed = 0
+    @size = 0
     @upload_receipts = nil
   end
 
@@ -506,15 +506,17 @@ class List < GlacierCommand
       else
         @collection.each do |receipt|
           puts receipt["filename"]
-          printf("Description: %s\n", receipt["description"])
+          printf("  Description: %s\n", receipt["description"])
           glacier_response = receipt["glacier_response"]
+          printf("  %s bytes\n", receipt["size"] || "unknown")
           if glacier_response && glacier_response["archive_id"]
-            printf("Archive file uploaded %s\n", receipt["completed"])
-            printf("Glacier archive ID: %s\n\n", glacier_response["archive_id"])
+            printf("  Archive file uploaded %s\n", receipt["completed"])
+            printf("  Glacier archive ID: %s\n", glacier_response["archive_id"])
             @completed += 1
+            @size += receipt["size"] || 0
           else
-            printf("FAILED archive file upload at %s\n", receipt["completed"])
-            printf("Error message: %s\n\n", receipt["error"] ||= "None")
+            printf("  FAILED archive file upload at %s\n", receipt["completed"])
+            printf("  Error message: %s\n", receipt["error"] ||= "None")
             @failed += 1
           end
         end
@@ -524,7 +526,7 @@ class List < GlacierCommand
         puts "No collections found for vault #{$options.vault}"
       else
         @collection.each do |name, archives|
-          printf("Collection: %-24s -- %d archives\n", name, archives.count)
+          printf("  Collection: %-24s -- %d archives\n", name, archives.count)
           @completed += archives.count
         end
       end
@@ -536,10 +538,11 @@ class List < GlacierCommand
       puts "Listing failed"
     else
       if $options.upload_name
-        puts "Upload collection #{$options.upload_name} contains #{@collection.count} archives"
+        printf("\nUpload collection %s contains %d archives\n", $options.upload_name, @collection.count)
         puts "#{@completed} files complete, #{@failed} files failed to upload"
+        puts "#{@size} bytes succesfully uploaded"
       else
-        puts "#{@collection.count} collections, #{@completed} files total"
+        printf("\n%d collections, %d files total\n", @collection.count, @completed)
       end
     end
   end

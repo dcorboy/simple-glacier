@@ -182,7 +182,7 @@ class Hash
 end
 
 class ReceiptFileIO
-  @@version = 1
+  @@version = 2
 
   def self.load_receipts(filename)
     if File.file?(filename)
@@ -208,17 +208,17 @@ class ReceiptFileIO
   end
 
   def self.get_named_collection(receipts_object, vault_name, collection_name, create = false)
-    collection = receipts_object.deep_seek("vaults", vault_name, collection_name)
+    collection = receipts_object.deep_seek("vaults", vault_name, "collections", collection_name)
     if collection.nil? && create
-      collection = receipts_object.deep_set([], "vaults", vault_name, collection_name)
+      collection = receipts_object.deep_set([], "vaults", vault_name, "collections", collection_name)
     end
     collection
   end
 
   def self.get_vault_collections(receipts_object, vault_name, create = false)
-    collection = receipts_object.deep_seek("vaults", vault_name)
+    collection = receipts_object.deep_seek("vaults", vault_name, "collections")
     if collection.nil? && create
-      collection = receipts_object.deep_set({}, "vaults", vault_name)
+      collection = receipts_object.deep_set({}, "vaults", vault_name, "collections")
     end
     collection
   end
@@ -256,9 +256,17 @@ class ReceiptFileIO
       }
     end
 
-    # if from_version < 2 (convert from 1 -> 2) end ... etc
+    if from_version < 2 # (convert from 1 -> 2) end ... etc
+      vaults = json["vaults"]
+      vaults.each do |vault, contents|
+        vaults[vault] = {
+          "collections" => contents
+        }
+      end
+    end
 
     json["version"] = @@version
+    # pp json
     json
   end
 end
@@ -691,7 +699,7 @@ class InventoryJob < GlacierCommand
       puts "Glacier job ID #{job["job_id"]}"
       @succeeded = true
     else
-      puts "Vault inventory request for #{vault} FAILED at #{Time.new}"
+      puts "Vault inventory request for #{$options.vault} FAILED"
     end
   end
 
@@ -731,11 +739,10 @@ class InventoryJob < GlacierCommand
       begin
         if $options.debug
           puts "  DEBUG: AWS initiate_job was not called"
+          @@mock_response
         else
-          puts "Aaaaaaahh!!"
-          #$client.initiate_job(args)
+          $client.initiate_job(args)
         end
-        @@mock_response
       rescue Exception => ex
         puts "  Inventory job request failed for vault #{vault} -- An error of type #{ex.class} occurred"
         puts "  Glacier message is: #{ex.message}"

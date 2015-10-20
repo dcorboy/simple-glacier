@@ -15,6 +15,9 @@ require 'aws-sdk'
 # maybe collection should be a hash with fn/desc as key?
 # report collection sizes in general list output?
 # fix stdout vs stderr output
+# the ReceiptsFileIO/datastore thing should be an object, with the hash as an instance var
+# delete and upload commands should be passed the valut name
+# "client" should be an aws wrapper object :-/
 
 
 #############
@@ -58,6 +61,8 @@ class SimpleGlacier
       cmd_obj = Delete.new(ARGV, receipts)
     when 'inventory'
       cmd_obj = InventoryJob.new(ARGV, receipts)
+    when 'jobs'
+      cmd_obj = CheckJobs.new(ARGV, receipts)
     else
       puts "Unknown command #{command}"
       show_help_and_exit()
@@ -132,6 +137,8 @@ class Parser
         printf("%10s %-16s  --  %s\n", "upload", "file [file..]", "Upload files as a named collection, appending to an existing collection")
         printf("%10s %-16s  --  %s\n", "list", "", "List file information for a named collection, or list all collections")
         printf("%10s %-16s  --  %s\n", "delete", "", "Delete all Glacier archive files in named collection")
+        printf("%10s %-16s  --  %s\n", "inventory", "", "Request an async Glacier inventory job for a given vault")
+        printf("%10s %-16s  --  %s\n", "jobs", "", "Check completion of async Glacier jobs and output results to stdout, if available")
         exit
       end
     end
@@ -306,6 +313,16 @@ class MockInventoryResponse  # used during testing
   def successful?
     true           # change for testing
   end
+end
+
+class MockDescribeJobResponse  # used during testing
+  def initialize(succeed)
+    @completed = succeed
+    @status_code = succeed ? "Succeeded" : "InProgress"
+  end
+
+  attr_reader :completed
+  attr_reader :status_code
 end
 
 class ExceptionResponse
@@ -632,7 +649,7 @@ class Delete < GlacierCommand
 
   def delete_glacier_archive(receipt, collection)
     return unless client_delete_archive(receipt)
-    puts "Successful deletetion of #{receipt["filename"]} (#{receipt["description"]})"
+    puts "Successful deletion of #{receipt["filename"]} (#{receipt["description"]})"
     true
   end
 
@@ -714,7 +731,7 @@ class InventoryJob < GlacierCommand
     if (response = client_initiate_inventory(vault)) && response.successful?
       job = {
         "type" => @@job_type,
-        "completed" => Time.new,
+        "requested" => Time.new,
         "job_id" => response.job_id,
         "location" => response.location
       }
@@ -726,7 +743,7 @@ class InventoryJob < GlacierCommand
   def client_initiate_inventory(vault)
     args = {
       account_id: "-",
-      vault_name: $options.vault,
+      vault_name: vault,
       job_parameters: { type: @@job_type }
     }
     if $dry_run
@@ -751,104 +768,118 @@ class InventoryJob < GlacierCommand
   end
 end
 
-class CheckJob < GlacierCommand
+class CheckJobs < GlacierCommand
+  @@mock_response = MockDescribeJobResponse.new(true)
+
   def initialize(argv, receipts)
     super(argv, receipts)
-    @completed = 0
-    @failed = 0
   end
 
   def check_args
-    if !$options.upload_name
-      puts "Name of collection to delete must be specified using '-n NAME' switch" 
-    elsif @argv.length > 0
-      puts "Delete takes no arguments. Specify collection name using '-n NAME' switch"
+    if @argv.length > 0
+      puts "Checking Glacier jobs takes no arguments"
     else
+      if $options.upload_name
+        puts "Collection name ignored. Glacier jobs are not collection-specific"
+      end
       true
     end
   end
 
   def banner_start
-    puts "Deletion of upload collection #{$options.upload_name} started at #{Time.new}"
+    puts "Retrieving Glacier jobs for #{$options.vault}"
   end
 
   def do_action
-    resp = glacier.describe_job({
-                                  account_id: "-",
-                                  vault_name: "corbuntu_archive",
-                                  job_id: "YJf17S_BVCShY9fFsTndj_SicrUL52qkPsIPxOuxMFnfNGKQvSPgvD7fwimCO6dBHpXHLbsdWhz7kiwsguI7nt4W2VJi"
-                                })
-
-    # puts JSON.pretty_generate(resp.data)
-    # puts resp.data  this works but don't do it, you get the object structure
-
-    puts resp.status_message
-    puts resp.status_code
-
-    if resp.status_code == "Succeeded"
-      resp = glacier.get_job_output({
-                                      account_id: "-",
-                                      vault_name: "corbuntu_archive",
-                                      job_id: "YJf17S_BVCShY9fFsTndj_SicrUL52qkPsIPxOuxMFnfNGKQvSPgvD7fwimCO6dBHpXHLbsdWhz7kiwsguI7nt4W2VJi",
-                                      response_target: "./glacier_listing_response"
-                                    })
-
-      puts resp.status
-      puts resp.content_type
-      puts resp.body
-    end
-  end
-
-  def banner_end
-    if @collection.nil?
-      puts "Delete failed"
+    jobs = ReceiptFileIO.get_vault_jobs(@receipts, $options.vault)
+    if jobs && !jobs.empty?
+      jobs.each do |job|
+        completed, code = check_glacier_job(job, $options.vault)
+        unless completed.nil?
+          puts "Job #{job["type"]} status request for #{job["job_id"]} succeeded"
+          puts "  Job status is #{code}"
+          if completed
+            puts "here I get the data"
+          end
+        end
+      end
     else
-      puts "Delete #{$options.upload_name} completed at #{Time.new}"
-      puts "Archives deleted: #{@completed}, failed: #{@failed}"
+      puts "No pending Glacier jobs for vault #{$options.vault}"
     end
   end
 
   def save_receipts?
-    true
+    false # we do not change the pending jobs data for now
   end
 
   #### protected class methods
   protected
 
-  def delete_glacier_archive(receipt, collection)
-    return unless client_delete_archive(receipt)
-    puts "Successful deletetion of #{receipt["filename"]} (#{receipt["description"]})"
-    true
+  def check_glacier_job(job, vault)
+    if (response = client_describe_job(job["job_id"], vault))
+      [response.completed, response.status_code]
+    end
   end
 
-  def client_delete_archive(receipt)
-    if (glacier_upload_response = receipt["glacier_response"]) && (id = glacier_upload_response["archive_id"])
-      args = {
-        account_id: "-",
-        vault_name: $options.vault,
-        archive_id: id
-      }
-      if $dry_run
-        puts "  Call client.delete_archive"
-        puts "  with argument:"
-        pp args
-        false  # change for testing
-      else
-        begin
-          if $options.debug
-            puts "  DEBUG: AWS delete was not called"
-          else
-            $client.delete_archive(args)
-          end
-          true
-        rescue Exception => ex
-          puts "  Delete failed for #{receipt["filename"]} (#{receipt["description"]}) -- An error of type #{ex.class} occurred"
-          puts "  Glacier message is: #{ex.message}"
-        end
-      end
+  def client_describe_job(job_id, vault)
+    args = {
+      account_id: "-",
+      vault_name: vault,
+      job_id: job_id
+    }
+    if $dry_run
+      puts "  Call client.describe_job"
+      puts "  with argument:"
+      pp args
+      # nil  # change for testing
+      @@mock_response
     else
-      puts "  Removing #{receipt["filename"]} (#{receipt["description"]}) -- no Glacier archive ID"
-      true
+      begin
+        if $options.debug
+          puts "  DEBUG: AWS describe_job was not called"
+          @@mock_response
+          # raise
+        else
+          $client.describe_job(args)
+        end
+      rescue Exception => ex
+        puts "Job status request for #{job_id} FAILED"
+        puts "  An error of type #{ex.class} occurred"
+        puts "  Glacier message is: #{ex.message}"
+      end
+    end
+  end
+
+  def get_glacier_job_output(job, vault)
+    (response = client_get_job_output(job["job_id"], vault)) ? [(response.status_code == 200), response.status_code] : [false, 0]
+  end
+
+  def client_get_job_output(job_id, vault)
+    args = {
+      account_id: "-",
+      vault_name: vault,
+      job_id: job_id,
+      response_target: "job_out"
+    }
+    if $dry_run
+      puts "  Call client.get_job_output"
+      puts "  with argument:"
+      pp args
+      # nil  # change for testing
+      @@mock_response
+    else
+      begin
+        if $options.debug
+          puts "  DEBUG: AWS get_job_output was not called"
+          @@mock_response
+        else
+          puts "Aaah!"
+          # $client.get_job_output(args)
+        end
+      rescue Exception => ex
+        puts "  Request for job output failed for job ID #{job_id} -- An error of type #{ex.class} occurred"
+        puts "  Glacier message is: #{ex.message}"
+      end
     end
   end
 end

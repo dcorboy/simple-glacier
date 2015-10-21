@@ -8,7 +8,6 @@ require 'aws-sdk'
 
 #TODO
 # listings should include all vaults? (can't default the vault name, then -- or could use different command)
-# add command to perform Glacier listing - job start, cache job id, check pending job, etc.
 # sync a glacier listing with local receipts?
 # option to 'retry' failed uploads
 # retry n times on initial upload
@@ -16,7 +15,7 @@ require 'aws-sdk'
 # report collection sizes in general list output?
 # fix stdout vs stderr output
 # the ReceiptsFileIO/datastore thing should be an object, with the hash as an instance var
-# delete and upload commands should be passed the valut name
+# delete and upload commands should be passed the vault name
 # "client" should be an aws wrapper object :-/
 
 
@@ -278,6 +277,9 @@ class ReceiptFileIO
   end
 end
 
+def shorten(id)
+  id[0..16] + "..."
+end
 
 ###########################
 ### COMMAND UTILITY CLASSES
@@ -323,6 +325,21 @@ class MockDescribeJobResponse  # used during testing
 
   attr_reader :completed
   attr_reader :status_code
+end
+
+class MockGetJobOutputResponse  # used during testing
+  def initialize(succeed)
+    @succeed = succeed
+    @status = succeed ? 200 : 404
+    @output = "VaultARN:arn:aws:glacier:us-east-1:923154980164:vaults/corbuntu_archive,InventoryDate:2015-10-12T13:46:09Z,ArchiveList:[{ArchiveId:EymLlqSjsnNKjTMrdplo734GhEe5lwRGbRGRqsJjDKiv6I8nFAycqjZKv5c4kpzpIuKsXzM4b59cssA6tN8WHa50vBzgkiX2p7o7wLZoEv01tBv7LGXitKaI2f5yus3Cw1q4fcAMJA"
+  end
+
+  attr_reader :status
+  attr_reader :output
+
+  def successful?
+    @succeed
+  end
 end
 
 class ExceptionResponse
@@ -421,6 +438,7 @@ class GlacierUploaderCore
           "checksum" => response.checksum,
           "location" => response.location
         }
+        puts "  Glacier archive ID: #{response.archive_id}"
       else
         puts "  ERROR of type #{response.error.code} occurred"
         puts "  Error message is: #{response.error.message}"
@@ -559,7 +577,7 @@ class List < GlacierCommand
           printf("  %s bytes\n", receipt["size"] || "unknown")
           if glacier_response && glacier_response["archive_id"]
             printf("  Archive file uploaded %s\n", receipt["completed"])
-            printf("  Glacier archive ID: %s\n", glacier_response["archive_id"])
+            printf("  Glacier archive ID: %s\n", shorten(glacier_response["archive_id"]))
             @completed += 1
             @size += receipt["size"] || 0
           else
@@ -713,7 +731,7 @@ class InventoryJob < GlacierCommand
     jobs = ReceiptFileIO.get_vault_jobs(@receipts, $options.vault, true)
     if (job = initiate_glacier_inventory($options.vault, jobs))
       puts "Inventory job request for #{$options.vault} succeeded"
-      puts "Glacier job ID #{job["job_id"]}"
+      puts "Glacier job ID #{shorten(job["job_id"])}"
       @succeeded = true
     else
       puts "Vault inventory request for #{$options.vault} FAILED"
@@ -769,7 +787,8 @@ class InventoryJob < GlacierCommand
 end
 
 class CheckJobs < GlacierCommand
-  @@mock_response = MockDescribeJobResponse.new(true)
+  @@mock_describe_response = MockDescribeJobResponse.new(true)
+  @@mock_output_response = MockGetJobOutputResponse.new(true)
 
   def initialize(argv, receipts)
     super(argv, receipts)
@@ -796,10 +815,17 @@ class CheckJobs < GlacierCommand
       jobs.each do |job|
         completed, code = check_glacier_job(job, $options.vault)
         unless completed.nil?
-          puts "Job #{job["type"]} status request for #{job["job_id"]} succeeded"
+          puts "Job #{job["type"]} status request for #{shorten(job["job_id"])} succeeded"
           puts "  Job status is #{code}"
           if completed
-            puts "here I get the data"
+            output_file = "job_output." + job["job_id"][0..7]
+            succeeded, code = get_glacier_job_output(job["job_id"], $options.vault, output_file)
+            if succeeded
+              puts "Job #{job["type"]} output request for #{shorten(job["job_id"])} succeeded"
+              puts "  Job output sent to #{output_file}"
+            else
+              puts "Job #{job["type"]} status request for #{shorten(job["job_id"])} FAILED with code #{code}" if code
+            end
           end
         end
       end
@@ -832,52 +858,53 @@ class CheckJobs < GlacierCommand
       puts "  with argument:"
       pp args
       # nil  # change for testing
-      @@mock_response
+      @@mock_describe_response
     else
       begin
         if $options.debug
           puts "  DEBUG: AWS describe_job was not called"
-          @@mock_response
+          @@mock_describe_response
           # raise
         else
           $client.describe_job(args)
         end
       rescue Exception => ex
-        puts "Job status request for #{job_id} FAILED"
+        puts "Job status request for #{shorten(job_id)} FAILED"
         puts "  An error of type #{ex.class} occurred"
         puts "  Glacier message is: #{ex.message}"
       end
     end
   end
 
-  def get_glacier_job_output(job, vault)
-    (response = client_get_job_output(job["job_id"], vault)) ? [(response.status_code == 200), response.status_code] : [false, 0]
+  def get_glacier_job_output(job_id, vault, output_file)
+    (response = client_get_job_output(job_id, vault, output_file)) ? [response.successful?, response.status] : [false, nil]
   end
 
-  def client_get_job_output(job_id, vault)
+  def client_get_job_output(job_id, vault, output_file)
     args = {
       account_id: "-",
       vault_name: vault,
       job_id: job_id,
-      response_target: "job_out"
+      response_target: output_file
     }
     if $dry_run
       puts "  Call client.get_job_output"
       puts "  with argument:"
       pp args
       # nil  # change for testing
-      @@mock_response
+      @@mock_output_response
     else
       begin
         if $options.debug
           puts "  DEBUG: AWS get_job_output was not called"
-          @@mock_response
+          # @@mock_output_response.output --> output_file
+          @@mock_output_response
+          # raise
         else
-          puts "Aaah!"
-          # $client.get_job_output(args)
+          resp = $client.get_job_output(args)
         end
       rescue Exception => ex
-        puts "  Request for job output failed for job ID #{job_id} -- An error of type #{ex.class} occurred"
+        puts "  Request for job output failed for job ID #{shorten(job_id)} -- An error of type #{ex.class} occurred"
         puts "  Glacier message is: #{ex.message}"
       end
     end

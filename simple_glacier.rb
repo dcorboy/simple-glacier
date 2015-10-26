@@ -17,6 +17,7 @@ require 'aws-sdk'
 # the ReceiptsFileIO/datastore thing should be an object, with the hash as an instance var
 # delete and upload commands should be passed the vault name
 # "client" should be an aws wrapper object :-/
+# output strings are confusing
 
 
 #############
@@ -137,7 +138,7 @@ class Parser
         printf("%10s %-16s  --  %s\n", "list", "", "List file information for a named collection, or list all collections")
         printf("%10s %-16s  --  %s\n", "delete", "", "Delete all Glacier archive files in named collection")
         printf("%10s %-16s  --  %s\n", "inventory", "", "Request an async Glacier inventory job for a given vault")
-        printf("%10s %-16s  --  %s\n", "jobs", "", "Check completion of async Glacier jobs and output results to stdout, if available")
+        printf("%10s %-16s  --  %s\n", "jobs", "", "Check completion of async Glacier jobs and write available results to an output file")
         exit
       end
     end
